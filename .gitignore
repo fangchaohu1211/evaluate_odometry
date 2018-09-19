@@ -5,3 +5,4 @@ cmake-build-release/
 .kdev4/
 3rdparty/
 evaluate_odometry.kdev4
+Trajectory/

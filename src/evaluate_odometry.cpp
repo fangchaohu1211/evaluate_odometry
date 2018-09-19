@@ -3,6 +3,7 @@
 #include <math.h>
 #include <vector>
 #include <limits>
+#include <dirent.h>
 
 #include "mail.h"
 #include "matrix.h"
@@ -405,66 +406,78 @@ void saveStats (vector<errors> err,string dir) {
   fclose(fp);
 }
 
-bool eval (string result_sha,Mail* mail) {
+bool eval (string input_dir, string gt_dir, vector<string> &fileList, Mail* mail) {
 
   // ground truth and result directories
-  string gt_dir         = "data/odometry/poses";
-  string result_dir     = "results/" + result_sha;
+    
+  string result_dir     = "./results";
   string error_dir      = result_dir + "/errors";
   string plot_path_dir  = result_dir + "/plot_path";
   string plot_error_dir = result_dir + "/plot_error";
 
   // create output directories
+  system(("mkdir " + result_dir).c_str());  
   system(("mkdir " + error_dir).c_str());
   system(("mkdir " + plot_path_dir).c_str());
   system(("mkdir " + plot_error_dir).c_str());
+  
   
   // total errors
   vector<errors> total_err;
 
   // for all sequences do
-  for (int32_t i=11; i<22; i++) {
+  for (int32_t i=0; i < fileList.size(); i++) {
    
     // file name
-    char file_name[256];
-    sprintf(file_name,"%02d.txt",i);
     
     // read ground truth and result poses
-    vector<Matrix> poses_gt     = loadPoses(gt_dir + "/" + file_name);
-    vector<Matrix> poses_result = loadPoses(result_dir + "/data/" + file_name);
+    string path = fileList[i];
+    int file_num =0;
+    
+    path.replace(path.end()-4,path.end(), "");
+    
+    file_num = atoi(path.c_str());
+    cout <<"file_num: "<< file_num <<endl;
+    
+    vector<Matrix> poses_result = loadPoses(input_dir + fileList[i].c_str());      
+    vector<Matrix> poses_gt     = loadPoses(gt_dir + path +"_gt.txt");
    
     // plot status
-    mail->msg("Processing: %s, poses: %d/%d",file_name,poses_result.size(),poses_gt.size());
-    
+    mail->msg("Processing: %s, gt:%s, poses: %d/%d",fileList[i].c_str(),path.c_str(),poses_result.size(),poses_gt.size());
+
     // check for errors
     if (poses_gt.size()==0 || poses_result.size()!=poses_gt.size()) {
-      mail->msg("ERROR: Couldn't read (all) poses of: %s", file_name);
+      mail->msg("ERROR: Couldn't read (all) poses of: %s", fileList[i].c_str());
       return false;
     }
 
     // compute sequence errors    
     vector<errors> seq_err = calcSequenceErrors(poses_gt,poses_result);
-    saveSequenceErrors(seq_err,error_dir + "/" + file_name);
+    saveSequenceErrors(seq_err,error_dir + "/" + fileList[i].c_str());
+
     
     // add to total errors
     total_err.insert(total_err.end(),seq_err.begin(),seq_err.end());
     
+    //--------------------------------
     // for first half => plot trajectory and compute individual stats
-    if (i<=15) {
+//     if (i<=15) {
     
       // save + plot bird's eye view trajectories
-      savePathPlot(poses_gt,poses_result,plot_path_dir + "/" + file_name);
-      vector<int32_t> roi = computeRoi(poses_gt,poses_result);
-      plotPathPlot(plot_path_dir,roi,i);
+    savePathPlot(poses_gt,poses_result,plot_path_dir + "/" + fileList[i].c_str());
+    vector<int32_t> roi = computeRoi(poses_gt,poses_result);
 
-      // save + plot individual errors
-      char prefix[16];
-      sprintf(prefix,"%02d",i);
-      saveErrorPlots(seq_err,plot_error_dir,prefix);
-      plotErrorPlots(plot_error_dir,prefix);
-    }
+    plotPathPlot(plot_path_dir,roi,file_num);
+
+    // save + plot individual errors
+    char prefix[16];
+    sprintf(prefix,"%02d",file_num);
+
+    saveErrorPlots(seq_err,plot_error_dir,prefix);
+    plotErrorPlots(plot_error_dir,prefix);
+//     }
   }
-  
+
   // save + plot total errors + summary statistics
   if (total_err.size()>0) {
     char prefix[16];
@@ -478,27 +491,68 @@ bool eval (string result_sha,Mail* mail) {
 	return true;
 }
 
+/**
+    Linux下扫描文件夹， 获得文件夹下的文件名
+*/
+int scanFiles(vector<string> &fileList, string inputDirectory)
+{
+
+    DIR *p_dir;
+    const char* str = inputDirectory.c_str();
+
+    p_dir = opendir(str);   
+    if( p_dir == NULL)
+    {
+        cout<< "can't open :" << inputDirectory << endl;
+    }
+
+    struct dirent *p_dirent;
+
+    while ( p_dirent = readdir(p_dir))
+    {
+        string tmpFileName = p_dirent->d_name;
+        if( tmpFileName == "." || tmpFileName == "..")
+        {
+            continue;
+        }
+        else
+        {
+            fileList.push_back(tmpFileName);
+        }
+    }
+    closedir(p_dir);
+    return fileList.size();
+}
+
+
 int32_t main (int32_t argc,char *argv[]) {
 
-  // we need 2 or 4 arguments!
-  if (argc!=2 && argc!=4) {
-    cout << "Usage: ./eval_odometry result_sha [user_sha email]" << endl;
+  if (argc!=3) {
+    cout << "Usage: ./evaluate_odometry $your_Trajectory_Dir $Ground_truth_Dir\n" << endl;
+    cout << "your_Trajectory_Dir and Ground_truth_Dir should end with '/' \n" << endl;    
+    cout << "If your_Trajectory_file name is '06.txt', and Ground_truth_file name should be '06_gt.txt' \n" << endl; 
+    cout << "\none example: ./evaluate_odometry ./Inmput/ ./Ground_truth\n " << endl;     
+    cout << "In ./Inmput/ has '06.txt' and '11.txt';\nIn ./Ground_truth has '06_gt.txt' and '11_gt.txt'" << endl;
+    cout << "\nThe result will be in ./result " << endl;        
     return 1;
   }
 
   // read arguments
-  string result_sha = argv[1];
+  string input_dir = argv[1];
+  string gt_dir = argv[2];
 
+  vector<string> fileList;
+  
   // init notification mail
   Mail *mail;
-  if (argc==4) mail = new Mail(argv[3]);
+  if (argc==4) mail = new Mail("robinwuwu139@gmail.com");
   else         mail = new Mail();
   mail->msg("Thank you for participating in our evaluation!");
 
+  scanFiles(fileList, input_dir);
+  
   // run evaluation
-  bool success = eval(result_sha,mail);
-//   if (argc==4) mail->finalize(success,"odometry",result_sha,argv[2]);
-//   else         mail->finalize(success,"odometry",result_sha);
+  bool success = eval(input_dir, gt_dir, fileList, mail);
 
   // send mail and exit
   delete mail;
