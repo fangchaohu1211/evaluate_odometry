@@ -7,7 +7,7 @@
 
 #include "mail.h"
 #include "matrix.h"
-
+#include <fstream>
 using namespace std;
 
 // static parameter
@@ -79,19 +79,21 @@ inline float translationError(Matrix &pose_error) {
   return sqrt(dx*dx+dy*dy+dz*dz);
 }
 
+//该评估方法计算的误差主要是在第x秒(10fps)的时候, 往后的100,200,300...800路程, 旋转和平移的误差相对与路程的偏移.
+//该评估方法主要是考察误差的积累情况.
 vector<errors> calcSequenceErrors (vector<Matrix> &poses_gt,vector<Matrix> &poses_result) {
 
   // error vector
   vector<errors> err;
 
   // parameters
-  int32_t step_size = 10; // every second
+  int32_t step_size = 10; // every second 每秒10帧
   
-  // pre-compute distances (from ground truth as reference)
+  // pre-compute distances (from ground truth as reference) 计算每个点到原点的路程
   vector<float> dist = trajectoryDistances(poses_gt);
  
   // for all start positions do
-  for (int32_t first_frame=0; first_frame<poses_gt.size(); first_frame+=step_size) {
+  for (int32_t first_frame=0; first_frame<poses_gt.size(); first_frame+=step_size) { //步进10,即1秒
   
     // for all segment lengths do
     for (int32_t i=0; i<num_lengths; i++) {
@@ -118,7 +120,7 @@ vector<errors> calcSequenceErrors (vector<Matrix> &poses_gt,vector<Matrix> &pose
       float speed = len/(0.1*num_frames);
       
       // write to file
-      err.push_back(errors(first_frame,r_err/len,t_err/len,len,speed));
+      err.push_back(errors(first_frame,r_err/len,t_err/len,len,speed)); 
     }
   }
 
@@ -406,6 +408,84 @@ void saveStats (vector<errors> err,string dir) {
   fclose(fp);
 }
 
+void euclidean_distance(vector<Matrix> &poses_result, vector<Matrix> &poses_gt, string error_dir, string plot_error_dir, int32_t idx)
+{
+    float distance=0, distance_sum=0, distance_max=0;
+    float x_tmp, y_tmp, z_tmp;
+    char file_name[256];    
+    sprintf(file_name,"/distanceError_%02d.txt",idx);
+    
+    std::ofstream distanceError( plot_error_dir+file_name, std::ios::out );
+    
+    sprintf(file_name,"/averageDistanceError_%02d.txt",idx);    
+    std::ofstream averageDistanceError( error_dir+"/averageDistanceError.txt", std::ios::out );
+    
+    for (int i=0; i< poses_result.size(); i++)
+    {
+        x_tmp = (poses_result[i].val[0][3]-poses_gt[i].val[0][3]);
+        y_tmp = (poses_result[i].val[1][3]-poses_gt[i].val[1][3]);
+        z_tmp = (poses_result[i].val[2][3]-poses_gt[i].val[2][3]);     
+
+        distance = sqrt((x_tmp*x_tmp)+(y_tmp*y_tmp)+(z_tmp*z_tmp));
+        distance_sum+=distance;
+        distanceError << i+1 <<' '<< distance<<std::endl;
+        if (distance > distance_max)
+            distance_max = distance;
+    }
+    averageDistanceError << (distance_sum/poses_result.size());
+    
+    distanceError.close();
+    averageDistanceError.close();
+    
+    
+ // gnuplot file name
+  char command[1024];
+
+  sprintf(file_name,"distance_%02d.gp",idx);
+  string full_name = plot_error_dir + "/" + file_name;
+  
+  // create png + eps
+  for (int32_t i=0; i<2; i++) {
+
+    // open file  
+    FILE *fp = fopen(full_name.c_str(),"w");
+
+    // save gnuplot instructions
+    if (i==0) {
+      fprintf(fp,"set term png size 900,900\n");
+      fprintf(fp,"set output \"distance_%02d.png\"\n",idx);
+    } else {
+      fprintf(fp,"set term postscript eps enhanced color\n");
+      fprintf(fp,"set output \"distance_%02d.eps\"\n",idx);
+    }
+
+    fprintf(fp,"set size ratio -1\n");
+    fprintf(fp,"set xrange [%d:%d]\n",0,(int)poses_result.size()+1);
+    fprintf(fp,"set yrange [%d:%d]\n",0,(int)distance_max+1);
+    fprintf(fp,"set xlabel \"x [point]\"\n");
+    fprintf(fp,"set ylabel \"z [m]\"\n");
+    fprintf(fp,"plot \"distanceError_%02d.txt\" using 1:2 lc rgb \"#FF0000\" title 'Euclidean distance' w lines,",idx);
+//    fprintf(fp,"\"%02d.txt\" using 3:4 lc rgb \"#0000FF\" title 'Visual Odometry' w lines,",idx);
+//    fprintf(fp,"\"< head -1 %02d.txt\" using 1:2 lc rgb \"#000000\" pt 4 ps 1 lw 2 title 'Sequence Start' w points\n",idx);
+    
+    // close file
+    fclose(fp);
+    
+    // run gnuplot => create png + eps
+    sprintf(command,"cd %s; gnuplot %s",plot_error_dir.c_str(),file_name);
+    system(command);
+  }
+  
+  // create pdf and crop
+  sprintf(command,"cd %s; ps2pdf distance_%02d.eps distance_%02d_large.pdf",plot_error_dir.c_str(),idx,idx);
+  system(command);
+  sprintf(command,"cd %s; pdfcrop distance_%02d_large.pdf distance_%02d.pdf",plot_error_dir.c_str(),idx,idx);
+  system(command);
+  sprintf(command,"cd %s; rm distance_%02d_large.pdf",plot_error_dir.c_str(),idx);
+  system(command);    
+}
+
+
 bool eval (string input_dir, string gt_dir, vector<string> &fileList, Mail* mail) {
 
   // ground truth and result directories
@@ -442,6 +522,8 @@ bool eval (string input_dir, string gt_dir, vector<string> &fileList, Mail* mail
     vector<Matrix> poses_result = loadPoses(input_dir + fileList[i].c_str());      
     vector<Matrix> poses_gt     = loadPoses(gt_dir + path +"_gt.txt");
    
+    euclidean_distance(poses_result, poses_gt,  error_dir, plot_error_dir, file_num);    
+    
     // plot status
     mail->msg("Processing: %s, gt:%s, poses: %d/%d",fileList[i].c_str(),path.c_str(),poses_result.size(),poses_gt.size());
 
@@ -465,7 +547,7 @@ bool eval (string input_dir, string gt_dir, vector<string> &fileList, Mail* mail
     
       // save + plot bird's eye view trajectories
     savePathPlot(poses_gt,poses_result,plot_path_dir + "/" + fileList[i].c_str());
-    vector<int32_t> roi = computeRoi(poses_gt,poses_result);
+    vector<int32_t> roi = computeRoi(poses_gt,poses_result);//计算x ,z的范围, 用于画图设置坐标轴范围
 
     plotPathPlot(plot_path_dir,roi,file_num);
 
