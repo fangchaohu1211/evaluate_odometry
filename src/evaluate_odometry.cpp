@@ -410,7 +410,7 @@ void saveStats (vector<errors> err,string dir) {
 
 void euclidean_distance(vector<Matrix> &poses_result, vector<Matrix> &poses_gt, string error_dir, string plot_error_dir, int32_t idx)
 {
-    float distance=0, distance_sum=0, distance_max=0;
+    float distance=0, distance_sum=0, distance_max=0, distance_min=0;
     float x_tmp, y_tmp, z_tmp;
     char file_name[256];    
     sprintf(file_name,"/distanceError_%02d.txt",idx);
@@ -418,7 +418,7 @@ void euclidean_distance(vector<Matrix> &poses_result, vector<Matrix> &poses_gt, 
     std::ofstream distanceError( plot_error_dir+file_name, std::ios::out );
     
     sprintf(file_name,"/averageDistanceError_%02d.txt",idx);    
-    std::ofstream averageDistanceError( error_dir+"/averageDistanceError.txt", std::ios::out );
+    std::ofstream averageDistanceError( error_dir+file_name, std::ios::out );
     
     for (int i=0; i< poses_result.size(); i++)
     {
@@ -430,9 +430,17 @@ void euclidean_distance(vector<Matrix> &poses_result, vector<Matrix> &poses_gt, 
         distance_sum+=distance;
         distanceError << i+1 <<' '<< distance<<std::endl;
         if (distance > distance_max)
+        {
             distance_max = distance;
+        }
+        if (distance < distance_min)
+        {
+            distance_min = distance;
+        }
     }
-    averageDistanceError << (distance_sum/poses_result.size());
+    averageDistanceError <<"Average: " <<(distance_sum/poses_result.size())<<std::endl;
+    averageDistanceError << "Max:" <<distance_max<<std::endl;
+    averageDistanceError << "Min:" <<distance_min<<std::endl;
     
     distanceError.close();
     averageDistanceError.close();
